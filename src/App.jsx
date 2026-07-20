@@ -74,6 +74,21 @@ export default function App() {
   const [expenses, setExpenses] = useState([]);
   const [customers, setCustomers] = useState([]);
 
+  const [installPrompt, setInstallPrompt] = useState(null);
+  useEffect(() => {
+    const onPromptable = (e) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+    };
+    const onInstalled = () => setInstallPrompt(null);
+    window.addEventListener("beforeinstallprompt", onPromptable);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onPromptable);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, []);
+
   const mounted = useRef(false);
   // When a change arrives from another device (via storage.subscribe), the
   // matching flag is set so the save effect below skips re-writing the same
@@ -189,6 +204,19 @@ export default function App() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {installPrompt && (
+            <button
+              onClick={async () => {
+                installPrompt.prompt();
+                await installPrompt.userChoice;
+                setInstallPrompt(null);
+              }}
+              style={{ background: "var(--accent)", color: "var(--primary)" }}
+              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full"
+            >
+              <Download size={14} /> Install app
+            </button>
+          )}
           <div
             title={supabase ? "Data syncs live across every device using this app" : "Saving to this device only — set up Supabase to share live across devices"}
             style={{ background: "rgba(255,255,255,0.12)", color: "white" }}
