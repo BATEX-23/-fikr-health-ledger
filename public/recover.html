@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Fikr Ledger — Data Recovery Check</title>
+<style>
+  body { font-family: -apple-system, 'IBM Plex Sans', Arial, sans-serif; background: #F3F6F3; color: #16231F; margin: 0; padding: 20px; }
+  h1 { font-size: 20px; color: #0F4C43; }
+  p.sub { color: #6B7A73; font-size: 13px; margin-top: -8px; }
+  .card { background: white; border: 1px solid #E1E7E2; border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+  .card h2 { font-size: 15px; margin: 0 0 8px; color: #0F4C43; }
+  .empty { color: #6B7A73; font-size: 13px; }
+  .found { color: #A63D40; font-weight: 600; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 6px; }
+  th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #E1E7E2; }
+  th { color: #6B7A73; font-weight: 600; }
+  button { background: #0F4C43; color: white; border: none; border-radius: 8px; padding: 10px 16px; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+  textarea { width: 100%; height: 160px; margin-top: 10px; font-family: monospace; font-size: 11px; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #E1E7E2; }
+  .banner { background: #E4EFEA; border-left: 4px solid #0F4C43; padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
+</style>
+</head>
+<body>
+  <h1>Fikr Ledger — Data Recovery Check</h1>
+  <p class="sub">Checks THIS browser, on THIS device, for any sales/inventory/expenses/customers data saved before live sync was set up.</p>
+  <div class="banner">This only reads data already stored in this browser — it changes nothing and sends nothing anywhere automatically. If something is found, use the copy button and share it in chat.</div>
+  <div id="results"></div>
+  <script>
+    const results = document.getElementById("results");
+    const KEYS = [
+      ["fhi:fhi:sales", "Sales"],
+      ["fhi:fhi:inventory", "Inventory"],
+      ["fhi:fhi:expenses", "Expenses"],
+      ["fhi:fhi:customers", "Customers"],
+      ["fhi:sales", "Sales (alt key)"],
+      ["fhi:inventory", "Inventory (alt key)"],
+      ["fhi:expenses", "Expenses (alt key)"],
+      ["fhi:customers", "Customers (alt key)"],
+    ];
+
+    let anyFound = false;
+    const dump = {};
+
+    for (const [key, label] of KEYS) {
+      const raw = localStorage.getItem(key);
+      const card = document.createElement("div");
+      card.className = "card";
+      if (!raw) {
+        card.innerHTML = `<h2>${label}</h2><div class="empty">Nothing stored under "${key}" in this browser.</div>`;
+        results.appendChild(card);
+        continue;
+      }
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+      const count = Array.isArray(parsed) ? parsed.length : null;
+      if (Array.isArray(parsed) && parsed.length === 0) {
+        card.innerHTML = `<h2>${label}</h2><div class="empty">Empty array under "${key}".</div>`;
+        results.appendChild(card);
+        continue;
+      }
+      anyFound = true;
+      dump[key] = parsed;
+      let html = `<h2>${label}</h2><div class="found">Found ${count !== null ? count + " record(s)" : "data"} under "${key}"</div>`;
+      if (Array.isArray(parsed) && parsed.length) {
+        const cols = Object.keys(parsed[0]).filter(c => c !== "id");
+        html += "<table><thead><tr>" + cols.map(c => `<th>${c}</th>`).join("") + "</tr></thead><tbody>";
+        for (const row of parsed.slice(0, 200)) {
+          html += "<tr>" + cols.map(c => `<td>${row[c] ?? ""}</td>`).join("") + "</tr>";
+        }
+        html += "</tbody></table>";
+      }
+      card.innerHTML = html;
+      results.appendChild(card);
+    }
+
+    if (anyFound) {
+      const copyCard = document.createElement("div");
+      copyCard.className = "card";
+      const json = JSON.stringify(dump, null, 1);
+      copyCard.innerHTML = `
+        <h2>Copy everything found</h2>
+        <button id="copyBtn">Copy to clipboard</button>
+        <span id="copyStatus" style="margin-left:10px;font-size:12px;color:#6B7A73;"></span>
+        <textarea readonly>${json.replace(/</g, "&lt;")}</textarea>
+      `;
+      results.appendChild(copyCard);
+      document.getElementById("copyBtn").onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(json);
+          document.getElementById("copyStatus").textContent = "Copied! Paste it in the chat.";
+        } catch {
+          document.getElementById("copyStatus").textContent = "Couldn't auto-copy — select the text below and copy manually.";
+        }
+      };
+    } else {
+      const none = document.createElement("div");
+      none.className = "card";
+      none.innerHTML = `<div class="empty" style="font-size:14px;">No leftover data found in this browser on this device. Try opening this same page (<code>/recover.html</code>) on any OTHER phone/browser/device you've ever used the app on.</div>`;
+      results.appendChild(none);
+    }
+  </script>
+</body>
+</html>
