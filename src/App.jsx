@@ -33,14 +33,13 @@ function inRange(dateStr, from, to) {
 }
 
 // ---------- storage ----------
+// Deliberately does NOT catch/swallow errors here: a failed fetch must never
+// be silently treated as "no data yet", because the caller uses the result
+// to decide what's safe to save back — see the load effect in App().
 async function loadKey(key, fallback) {
-  try {
-    const res = await storage.get(key);
-    if (res && res.value) return JSON.parse(res.value);
-    return fallback;
-  } catch {
-    return fallback;
-  }
+  const res = await storage.get(key);
+  if (res && res.value) return JSON.parse(res.value);
+  return fallback;
 }
 async function saveKey(key, value) {
   try {
@@ -66,6 +65,8 @@ function Seal({ size = 40 }) {
 // ---------- main app ----------
 export default function App() {
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [retryCount, setRetryCount] = useState(0);
   const [tab, setTab] = useState("dashboard");
   const [navOpen, setNavOpen] = useState(false);
 
@@ -96,21 +97,37 @@ export default function App() {
   const remoteEcho = useRef({ sales: false, inventory: false, expenses: false, customers: false });
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      const [s, i, e, c] = await Promise.all([
-        loadKey("fhi:sales", []),
-        loadKey("fhi:inventory", []),
-        loadKey("fhi:expenses", []),
-        loadKey("fhi:customers", []),
-      ]);
-      setSales(s);
-      setInventory(i);
-      setExpenses(e);
-      setCustomers(c);
-      setLoaded(true);
-      mounted.current = true;
+      try {
+        const [s, i, e, c] = await Promise.all([
+          loadKey("fhi:sales", []),
+          loadKey("fhi:inventory", []),
+          loadKey("fhi:expenses", []),
+          loadKey("fhi:customers", []),
+        ]);
+        if (cancelled) return;
+        setSales(s);
+        setInventory(i);
+        setExpenses(e);
+        setCustomers(c);
+        setLoadError(null);
+        setLoaded(true);
+        // Only now is it safe to let the save effects below write to
+        // storage — enabling them before a successful load risks writing
+        // empty/fallback data over real saved data if the load failed.
+        mounted.current = true;
+      } catch (err) {
+        if (cancelled) return;
+        console.error("Failed to load saved data", err);
+        setLoadError(err);
+        setLoaded(true);
+        // mounted.current stays false: nothing gets saved until a reload
+        // actually succeeds, so a connection hiccup can't wipe real data.
+      }
     })();
-  }, []);
+    return () => { cancelled = true; };
+  }, [retryCount]);
 
   // Live sync: reflect changes made from another device (e.g. the owner
   // recording a sale on their phone) without needing a page refresh.
@@ -175,6 +192,26 @@ export default function App() {
         <style>{GLOBAL_CSS}</style>
         <div className="text-sm" style={{ color: "var(--muted)", fontFamily: "'IBM Plex Sans', sans-serif" }}>
           Opening the ledger…
+        </div>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div style={{ background: "var(--bg)", minHeight: "100%", fontFamily: "'IBM Plex Sans', sans-serif" }} className="flex items-center justify-center p-6">
+        <style>{GLOBAL_CSS}</style>
+        <div style={{ ...cardStyle, borderLeft: "4px solid var(--danger)", maxWidth: 420 }} className="p-6 text-center space-y-3">
+          <AlertTriangle size={28} style={{ color: "var(--danger)", margin: "0 auto" }} />
+          <div style={{ color: "var(--ink)" }} className="font-semibold">Couldn't load your saved data</div>
+          <div style={{ color: "var(--muted)" }} className="text-sm">
+            This is likely a connection problem. Your saved sales, inventory, expenses and
+            customers are safe — nothing will be changed or saved until this reconnects, so
+            it's safe to just try again.
+          </div>
+          <button onClick={() => setRetryCount((n) => n + 1)} style={btnPrimary} className="mx-auto">
+            Try again
+          </button>
         </div>
       </div>
     );
