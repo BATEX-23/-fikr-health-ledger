@@ -23,6 +23,10 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ["**/*.{js,css,html,svg}"],
+        // Without this, the SPA fallback silently serves index.html for
+        // ANY navigation that isn't the exact app shell — including
+        // /recover.html — making that page unreachable once installed.
+        navigateFallbackDenylist: [/^\/recover\.html$/],
       },
     }),
   ],
