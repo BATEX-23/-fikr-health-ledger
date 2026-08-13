@@ -41,11 +41,13 @@ async function loadKey(key, fallback) {
   if (res && res.value) return JSON.parse(res.value);
   return fallback;
 }
-async function saveKey(key, value) {
+async function saveKey(key, value, onResult) {
   try {
     await storage.set(key, JSON.stringify(value));
+    onResult?.(null);
   } catch (e) {
     console.error("save failed", key, e);
+    onResult?.(e);
   }
 }
 
@@ -67,6 +69,7 @@ export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState(null);
   const [retryCount, setRetryCount] = useState(0);
+  const [saveError, setSaveError] = useState(null);
   const [tab, setTab] = useState("dashboard");
   const [navOpen, setNavOpen] = useState(false);
 
@@ -148,23 +151,37 @@ export default function App() {
   useEffect(() => {
     if (!mounted.current) return;
     if (remoteEcho.current.sales) { remoteEcho.current.sales = false; return; }
-    saveKey("fhi:sales", sales);
+    saveKey("fhi:sales", sales, setSaveError);
   }, [sales]);
   useEffect(() => {
     if (!mounted.current) return;
     if (remoteEcho.current.inventory) { remoteEcho.current.inventory = false; return; }
-    saveKey("fhi:inventory", inventory);
+    saveKey("fhi:inventory", inventory, setSaveError);
   }, [inventory]);
   useEffect(() => {
     if (!mounted.current) return;
     if (remoteEcho.current.expenses) { remoteEcho.current.expenses = false; return; }
-    saveKey("fhi:expenses", expenses);
+    saveKey("fhi:expenses", expenses, setSaveError);
   }, [expenses]);
   useEffect(() => {
     if (!mounted.current) return;
     if (remoteEcho.current.customers) { remoteEcho.current.customers = false; return; }
-    saveKey("fhi:customers", customers);
+    saveKey("fhi:customers", customers, setSaveError);
   }, [customers]);
+
+  // Backs the "it'll keep retrying" promise in the save-error banner: as
+  // long as a save is failing, keep re-attempting all four keys (harmless
+  // if some already succeeded) until one succeeds and clears the error.
+  useEffect(() => {
+    if (!saveError) return;
+    const id = setInterval(() => {
+      saveKey("fhi:sales", sales, setSaveError);
+      saveKey("fhi:inventory", inventory, setSaveError);
+      saveKey("fhi:expenses", expenses, setSaveError);
+      saveKey("fhi:customers", customers, setSaveError);
+    }, 8000);
+    return () => clearInterval(id);
+  }, [saveError, sales, inventory, expenses, customers]);
 
   const inventoryByName = useMemo(() => {
     const m = new Map();
@@ -278,6 +295,17 @@ export default function App() {
           )}
         </div>
       </header>
+
+      {saveError && (
+        <div
+          style={{ background: "var(--danger)", color: "white" }}
+          className="flex items-center gap-2 px-4 sm:px-6 py-2 text-xs sm:text-sm font-medium sticky top-[60px] z-30"
+        >
+          <AlertTriangle size={15} />
+          Your last change didn't save — check your connection. Nothing else will be lost:
+          it'll keep retrying safely and this warning clears once it saves successfully.
+        </div>
+      )}
 
       <div className="flex">
         {/* Sidebar */}
