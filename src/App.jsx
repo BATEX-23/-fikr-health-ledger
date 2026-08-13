@@ -78,13 +78,28 @@ export default function App() {
   const [expenses, setExpenses] = useState([]);
   const [customers, setCustomers] = useState([]);
 
+  // Chrome/Edge/Android fire `beforeinstallprompt` and let us trigger a
+  // native install dialog. Safari (iOS/iPadOS) and some other browsers
+  // never fire it at all, and Chrome sometimes delays or skips it on a
+  // first visit — so the button below must still show up and guide the
+  // user manually rather than silently disappearing in those cases.
   const [installPrompt, setInstallPrompt] = useState(null);
+  const [isStandalone, setIsStandalone] = useState(false);
+  const [showInstallHelp, setShowInstallHelp] = useState(false);
+  const isIOS = typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+
   useEffect(() => {
+    setIsStandalone(
+      window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true
+    );
     const onPromptable = (e) => {
       e.preventDefault();
       setInstallPrompt(e);
     };
-    const onInstalled = () => setInstallPrompt(null);
+    const onInstalled = () => {
+      setInstallPrompt(null);
+      setIsStandalone(true);
+    };
     window.addEventListener("beforeinstallprompt", onPromptable);
     window.addEventListener("appinstalled", onInstalled);
     return () => {
@@ -258,12 +273,16 @@ export default function App() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {installPrompt && (
+          {!isStandalone && (
             <button
               onClick={async () => {
-                installPrompt.prompt();
-                await installPrompt.userChoice;
-                setInstallPrompt(null);
+                if (installPrompt) {
+                  installPrompt.prompt();
+                  await installPrompt.userChoice;
+                  setInstallPrompt(null);
+                } else {
+                  setShowInstallHelp(true);
+                }
               }}
               style={{ background: "var(--accent)", color: "var(--primary)" }}
               className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full"
@@ -295,6 +314,44 @@ export default function App() {
           )}
         </div>
       </header>
+
+      {showInstallHelp && (
+        <div
+          onClick={() => setShowInstallHelp(false)}
+          style={{ background: "rgba(0,0,0,0.5)" }}
+          className="fixed inset-0 z-40 flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ ...cardStyle, maxWidth: 380 }}
+            className="p-5 space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <div style={{ color: "var(--ink)" }} className="font-semibold text-sm">
+                {isIOS ? "Install on iPhone/iPad" : "Install this app"}
+              </div>
+              <button onClick={() => setShowInstallHelp(false)} style={{ color: "var(--muted)" }}>
+                <X size={18} />
+              </button>
+            </div>
+            {isIOS ? (
+              <ol className="text-sm space-y-2 pl-4" style={{ color: "var(--ink)", listStyle: "decimal" }}>
+                <li>Tap the <strong>Share</strong> icon (square with an arrow) in Safari's toolbar.</li>
+                <li>Scroll down and tap <strong>"Add to Home Screen"</strong>.</li>
+                <li>Tap <strong>"Add"</strong> in the top-right corner.</li>
+              </ol>
+            ) : (
+              <div className="text-sm space-y-2" style={{ color: "var(--ink)" }}>
+                <p>Your browser hasn't offered the automatic install prompt yet. You can still install manually:</p>
+                <ul className="pl-4 space-y-1" style={{ listStyle: "disc" }}>
+                  <li>Look for an install icon in the address bar, or</li>
+                  <li>Open your browser's menu (⋮ or ≡) and look for <strong>"Install app"</strong> or <strong>"Add to Home Screen"</strong>.</li>
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {saveError && (
         <div
