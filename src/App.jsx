@@ -9,7 +9,6 @@ import {
 } from "recharts";
 import * as XLSX from "xlsx";
 import { storage } from "./storage";
-import { supabase } from "./supabaseClient";
 
 // ---------- helpers ----------
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -33,21 +32,20 @@ function inRange(dateStr, from, to) {
 }
 
 // ---------- storage ----------
-// Deliberately does NOT catch/swallow errors here: a failed fetch must never
-// be silently treated as "no data yet", because the caller uses the result
-// to decide what's safe to save back — see the load effect in App().
 async function loadKey(key, fallback) {
-  const res = await storage.get(key);
-  if (res && res.value) return JSON.parse(res.value);
-  return fallback;
+  try {
+    const res = await storage.get(key);
+    if (res && res.value) return JSON.parse(res.value);
+    return fallback;
+  } catch {
+    return fallback;
+  }
 }
-async function saveKey(key, value, onResult) {
+async function saveKey(key, value) {
   try {
     await storage.set(key, JSON.stringify(value));
-    onResult?.(null);
   } catch (e) {
     console.error("save failed", key, e);
-    onResult?.(e);
   }
 }
 
@@ -67,9 +65,6 @@ function Seal({ size = 40 }) {
 // ---------- main app ----------
 export default function App() {
   const [loaded, setLoaded] = useState(false);
-  const [loadError, setLoadError] = useState(null);
-  const [retryCount, setRetryCount] = useState(0);
-  const [saveError, setSaveError] = useState(null);
   const [tab, setTab] = useState("dashboard");
   const [navOpen, setNavOpen] = useState(false);
 
@@ -78,125 +73,29 @@ export default function App() {
   const [expenses, setExpenses] = useState([]);
   const [customers, setCustomers] = useState([]);
 
-  // Chrome/Edge/Android fire `beforeinstallprompt` and let us trigger a
-  // native install dialog. Safari (iOS/iPadOS) and some other browsers
-  // never fire it at all, and Chrome sometimes delays or skips it on a
-  // first visit — so the button below must still show up and guide the
-  // user manually rather than silently disappearing in those cases.
-  const [installPrompt, setInstallPrompt] = useState(null);
-  const [isStandalone, setIsStandalone] = useState(false);
-  const [showInstallHelp, setShowInstallHelp] = useState(false);
-  const isIOS = typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-
-  useEffect(() => {
-    setIsStandalone(
-      window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true
-    );
-    const onPromptable = (e) => {
-      e.preventDefault();
-      setInstallPrompt(e);
-    };
-    const onInstalled = () => {
-      setInstallPrompt(null);
-      setIsStandalone(true);
-    };
-    window.addEventListener("beforeinstallprompt", onPromptable);
-    window.addEventListener("appinstalled", onInstalled);
-    return () => {
-      window.removeEventListener("beforeinstallprompt", onPromptable);
-      window.removeEventListener("appinstalled", onInstalled);
-    };
-  }, []);
-
   const mounted = useRef(false);
-  // When a change arrives from another device (via storage.subscribe), the
-  // matching flag is set so the save effect below skips re-writing the same
-  // data back — otherwise two open tabs would ping-pong writes forever.
-  const remoteEcho = useRef({ sales: false, inventory: false, expenses: false, customers: false });
 
   useEffect(() => {
-    let cancelled = false;
     (async () => {
-      try {
-        const [s, i, e, c] = await Promise.all([
-          loadKey("fhi:sales", []),
-          loadKey("fhi:inventory", []),
-          loadKey("fhi:expenses", []),
-          loadKey("fhi:customers", []),
-        ]);
-        if (cancelled) return;
-        setSales(s);
-        setInventory(i);
-        setExpenses(e);
-        setCustomers(c);
-        setLoadError(null);
-        setLoaded(true);
-        // Only now is it safe to let the save effects below write to
-        // storage — enabling them before a successful load risks writing
-        // empty/fallback data over real saved data if the load failed.
-        mounted.current = true;
-      } catch (err) {
-        if (cancelled) return;
-        console.error("Failed to load saved data", err);
-        setLoadError(err);
-        setLoaded(true);
-        // mounted.current stays false: nothing gets saved until a reload
-        // actually succeeds, so a connection hiccup can't wipe real data.
-      }
+      const [s, i, e, c] = await Promise.all([
+        loadKey("fhi:sales", []),
+        loadKey("fhi:inventory", []),
+        loadKey("fhi:expenses", []),
+        loadKey("fhi:customers", []),
+      ]);
+      setSales(s);
+      setInventory(i);
+      setExpenses(e);
+      setCustomers(c);
+      setLoaded(true);
+      mounted.current = true;
     })();
-    return () => { cancelled = true; };
-  }, [retryCount]);
-
-  // Live sync: reflect changes made from another device (e.g. the owner
-  // recording a sale on their phone) without needing a page refresh.
-  useEffect(() => {
-    const setters = {
-      sales: setSales, inventory: setInventory, expenses: setExpenses, customers: setCustomers,
-    };
-    const unsubs = Object.keys(setters).map((name) =>
-      storage.subscribe(`fhi:${name}`, (value) => {
-        if (!mounted.current) return;
-        remoteEcho.current[name] = true;
-        setters[name](value ? JSON.parse(value) : []);
-      })
-    );
-    return () => unsubs.forEach((unsub) => unsub());
   }, []);
 
-  useEffect(() => {
-    if (!mounted.current) return;
-    if (remoteEcho.current.sales) { remoteEcho.current.sales = false; return; }
-    saveKey("fhi:sales", sales, setSaveError);
-  }, [sales]);
-  useEffect(() => {
-    if (!mounted.current) return;
-    if (remoteEcho.current.inventory) { remoteEcho.current.inventory = false; return; }
-    saveKey("fhi:inventory", inventory, setSaveError);
-  }, [inventory]);
-  useEffect(() => {
-    if (!mounted.current) return;
-    if (remoteEcho.current.expenses) { remoteEcho.current.expenses = false; return; }
-    saveKey("fhi:expenses", expenses, setSaveError);
-  }, [expenses]);
-  useEffect(() => {
-    if (!mounted.current) return;
-    if (remoteEcho.current.customers) { remoteEcho.current.customers = false; return; }
-    saveKey("fhi:customers", customers, setSaveError);
-  }, [customers]);
-
-  // Backs the "it'll keep retrying" promise in the save-error banner: as
-  // long as a save is failing, keep re-attempting all four keys (harmless
-  // if some already succeeded) until one succeeds and clears the error.
-  useEffect(() => {
-    if (!saveError) return;
-    const id = setInterval(() => {
-      saveKey("fhi:sales", sales, setSaveError);
-      saveKey("fhi:inventory", inventory, setSaveError);
-      saveKey("fhi:expenses", expenses, setSaveError);
-      saveKey("fhi:customers", customers, setSaveError);
-    }, 8000);
-    return () => clearInterval(id);
-  }, [saveError, sales, inventory, expenses, customers]);
+  useEffect(() => { if (mounted.current) saveKey("fhi:sales", sales); }, [sales]);
+  useEffect(() => { if (mounted.current) saveKey("fhi:inventory", inventory); }, [inventory]);
+  useEffect(() => { if (mounted.current) saveKey("fhi:expenses", expenses); }, [expenses]);
+  useEffect(() => { if (mounted.current) saveKey("fhi:customers", customers); }, [customers]);
 
   const inventoryByName = useMemo(() => {
     const m = new Map();
@@ -229,26 +128,6 @@ export default function App() {
     );
   }
 
-  if (loadError) {
-    return (
-      <div style={{ background: "var(--bg)", minHeight: "100%", fontFamily: "'IBM Plex Sans', sans-serif" }} className="flex items-center justify-center p-6">
-        <style>{GLOBAL_CSS}</style>
-        <div style={{ ...cardStyle, borderLeft: "4px solid var(--danger)", maxWidth: 420 }} className="p-6 text-center space-y-3">
-          <AlertTriangle size={28} style={{ color: "var(--danger)", margin: "0 auto" }} />
-          <div style={{ color: "var(--ink)" }} className="font-semibold">Couldn't load your saved data</div>
-          <div style={{ color: "var(--muted)" }} className="text-sm">
-            This is likely a connection problem. Your saved sales, inventory, expenses and
-            customers are safe — nothing will be changed or saved until this reconnects, so
-            it's safe to just try again.
-          </div>
-          <button onClick={() => setRetryCount((n) => n + 1)} style={btnPrimary} className="mx-auto">
-            Try again
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div style={{ background: "var(--bg)", minHeight: "100%", fontFamily: "'IBM Plex Sans', sans-serif" }} className="w-full">
       <style>{GLOBAL_CSS}</style>
@@ -272,97 +151,15 @@ export default function App() {
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          {!isStandalone && (
-            <button
-              onClick={async () => {
-                if (installPrompt) {
-                  installPrompt.prompt();
-                  await installPrompt.userChoice;
-                  setInstallPrompt(null);
-                } else {
-                  setShowInstallHelp(true);
-                }
-              }}
-              style={{ background: "var(--accent)", color: "var(--primary)" }}
-              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full"
-            >
-              <Download size={14} /> Install app
-            </button>
-          )}
+        {lowStockItems.length > 0 && (
           <div
-            title={supabase ? "Data syncs live across every device using this app" : "Saving to this device only — set up Supabase to share live across devices"}
-            style={{ background: "rgba(255,255,255,0.12)", color: "white" }}
-            className="hidden sm:flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-full"
+            style={{ background: "var(--danger)", color: "white" }}
+            className="hidden sm:flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full"
           >
-            <span
-              style={{
-                width: 7, height: 7, borderRadius: 999,
-                background: supabase ? "#4ade80" : "var(--accent)",
-                display: "inline-block",
-              }}
-            />
-            {supabase ? "Live sync on" : "This device only"}
+            <AlertTriangle size={14} /> {lowStockItems.length} item{lowStockItems.length > 1 ? "s" : ""} low on stock
           </div>
-          {lowStockItems.length > 0 && (
-            <div
-              style={{ background: "var(--danger)", color: "white" }}
-              className="hidden sm:flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full"
-            >
-              <AlertTriangle size={14} /> {lowStockItems.length} item{lowStockItems.length > 1 ? "s" : ""} low on stock
-            </div>
-          )}
-        </div>
+        )}
       </header>
-
-      {showInstallHelp && (
-        <div
-          onClick={() => setShowInstallHelp(false)}
-          style={{ background: "rgba(0,0,0,0.5)" }}
-          className="fixed inset-0 z-40 flex items-center justify-center p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{ ...cardStyle, maxWidth: 380 }}
-            className="p-5 space-y-3"
-          >
-            <div className="flex items-center justify-between">
-              <div style={{ color: "var(--ink)" }} className="font-semibold text-sm">
-                {isIOS ? "Install on iPhone/iPad" : "Install this app"}
-              </div>
-              <button onClick={() => setShowInstallHelp(false)} style={{ color: "var(--muted)" }}>
-                <X size={18} />
-              </button>
-            </div>
-            {isIOS ? (
-              <ol className="text-sm space-y-2 pl-4" style={{ color: "var(--ink)", listStyle: "decimal" }}>
-                <li>Tap the <strong>Share</strong> icon (square with an arrow) in Safari's toolbar.</li>
-                <li>Scroll down and tap <strong>"Add to Home Screen"</strong>.</li>
-                <li>Tap <strong>"Add"</strong> in the top-right corner.</li>
-              </ol>
-            ) : (
-              <div className="text-sm space-y-2" style={{ color: "var(--ink)" }}>
-                <p>Your browser hasn't offered the automatic install prompt yet. You can still install manually:</p>
-                <ul className="pl-4 space-y-1" style={{ listStyle: "disc" }}>
-                  <li>Look for an install icon in the address bar, or</li>
-                  <li>Open your browser's menu (⋮ or ≡) and look for <strong>"Install app"</strong> or <strong>"Add to Home Screen"</strong>.</li>
-                </ul>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {saveError && (
-        <div
-          style={{ background: "var(--danger)", color: "white" }}
-          className="flex items-center gap-2 px-4 sm:px-6 py-2 text-xs sm:text-sm font-medium sticky top-[60px] z-30"
-        >
-          <AlertTriangle size={15} />
-          Your last change didn't save — check your connection. Nothing else will be lost:
-          it'll keep retrying safely and this warning clears once it saves successfully.
-        </div>
-      )}
 
       <div className="flex">
         {/* Sidebar */}
